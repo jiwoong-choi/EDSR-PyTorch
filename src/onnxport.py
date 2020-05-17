@@ -2,9 +2,9 @@ import os
 
 import torch
 
-import EDSR.src.model as model
-import EDSR.src.utility as utility
-from EDSR.src.option import args
+import model
+import utility
+from option import args
 
 
 class ModelWrapper(torch.nn.Module):
