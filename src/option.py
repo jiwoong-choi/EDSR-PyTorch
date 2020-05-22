@@ -44,6 +44,25 @@ parser.add_argument('--chop', action='store_true',
 parser.add_argument('--no_augment', action='store_true',
                     help='do not use data augmentation')
 
+# ONNX export specifications
+parser.add_argument('--width', type=int, help='Input tile width')
+parser.add_argument('--height', type=int, help='Input tile height')
+parser.add_argument('--pad', type=int, help='Input tile padding size', default=0)
+parser.add_argument('--conv-mem-portion', type=float, default=1.0)
+parser.add_argument('--onnx-batch-size', type=int, default=1,
+                    help='ONNX batch size')
+parser.add_argument('--opset-version', type=int, default=10,
+                    help='ONNX opset version')
+
+# ONNX simplifier specifications
+parser.add_argument('--skip-simplify', action='store_true', help='Whether to skip onnx simplification')
+parser.add_argument('check_n', help='Check whether the output is correct with n random inputs',
+                        nargs='?', type=int, default=3)
+parser.add_argument('--enable-fuse-bn', help='Enable ONNX fuse_bn_into_conv optimizer. In some cases it causes incorrect model (https://github.com/onnx/onnx/issues/2677).',
+                    action='store_true')
+parser.add_argument('--skip-optimization', help='Skip optimization of ONNX optimizers.',
+                    action='store_true')
+
 # Model specifications
 parser.add_argument('--model', default='EDSR',
                     help='model name')
