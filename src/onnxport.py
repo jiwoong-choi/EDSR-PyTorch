@@ -92,7 +92,7 @@ if __name__ == '__main__':
         print('Simplifying ONNX protobuf ...')
         simplified_onnx_model, check_ok = onnxsim.simplify(
             onnx_path, check_n=args.check_n, perform_optimization=not args.skip_optimization,
-            skip_fuse_bn=not args.enable_fuse_bn, input_shapes={None: module.input_shape}
+            skip_fuse_bn=not args.enable_fuse_bn, input_shapes={'0': module.input_shape}
         )
 
         if check_ok:
