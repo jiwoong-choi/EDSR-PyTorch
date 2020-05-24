@@ -78,6 +78,7 @@ if __name__ == '__main__':
     with open(config_path, 'w') as fp:
         json.dump(
             {
+                'num_ipus': 1,
                 'conv_ids': getConvIds(onnx_model.graph),
                 'conv_mem_portion': args.conv_mem_portion,
                 'pad': args.pad,
