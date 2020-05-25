@@ -79,6 +79,7 @@ if __name__ == '__main__':
         json.dump(
             {
                 'num_ipus': 1,
+                'batches_per_step': 9,
                 'conv_ids': getConvIds(onnx_model.graph),
                 'conv_mem_portion': args.conv_mem_portion,
                 'pad': args.pad,
