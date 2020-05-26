@@ -51,7 +51,7 @@ parser.add_argument('--pad', type=int, help='Input tile padding size', default=0
 parser.add_argument('--conv-mem-portion', type=float, default=1.0)
 parser.add_argument('--micro-batch-size', type=int, default=1,
                     help='ONNX batch size')
-parser.add_argument('batches-per-step', type=int, default=1)
+parser.add_argument('--batches-per-step', type=int, default=1)
 parser.add_argument('--opset-version', type=int, default=10,
                     help='ONNX opset version')
 
