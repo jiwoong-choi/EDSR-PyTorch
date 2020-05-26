@@ -43,7 +43,7 @@ if __name__ == '__main__':
         args.width,
         args.height,
         args.pad,
-        args.onnx_batch_size
+        args.micro_batch_size
     )
 
     dir = os.path.split(args.pre_train)[0]
@@ -79,7 +79,7 @@ if __name__ == '__main__':
         json.dump(
             {
                 'num_ipus': 1,
-                'batches_per_step': 1920 * 1080 // (16 * module.tile_width * module.tile_height),
+                'batches_per_step': args.batches_per_step,
                 'conv_ids': getConvIds(onnx_model.graph),
                 'conv_mem_portion': args.conv_mem_portion,
                 'pad': args.pad,
