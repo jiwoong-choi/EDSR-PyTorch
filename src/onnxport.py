@@ -11,11 +11,12 @@ from option import args
 
 
 class ModelWrapper(torch.nn.Module):
-    def __init__(self, submodule, tile_width, tile_height, pad, batch_size):
+    def __init__(self, submodule, tile_width, tile_height, scale, pad, batch_size):
         super(ModelWrapper, self).__init__()
         self.submodule = submodule
         self.tile_width = tile_width
         self.tile_height = tile_height
+        self.scale = scale
         self.pad = pad
         self.batch_size = batch_size
 
@@ -26,7 +27,7 @@ class ModelWrapper(torch.nn.Module):
     def forward(self, x: torch.Tensor, idx_scale):
         x = self.submodule(x.permute((0, 3, 1, 2)), idx_scale).permute((0, 2, 3, 1)).clamp(0, 255)
         if self.pad > 0:
-            x = x[:, 2*self.pad:-2*self.pad, 2*self.pad:-2*self.pad, :]
+            x = x[:, self.scale*self.pad:-self.scale*self.pad, self.scale*self.pad:-self.scale*self.pad, :]
         return x
 
 def getConvIds(onnx_graph):
@@ -42,12 +43,13 @@ if __name__ == '__main__':
         model.Model(args, checkpoint),
         args.width,
         args.height,
+        args.scale[0],
         args.pad,
         args.micro_batch_size
     )
 
     dir = os.path.split(args.pre_train)[0]
-    filename = f'{args.model.lower()}-x{args.scale[0]}-r{args.n_resblocks}c{args.n_feats}_h{module.tile_height}w{module.tile_width}'
+    filename = f'{args.model.lower()}-x{args.scale[0]}-r{args.n_resblocks}c{args.n_feats}_h{module.tile_height}w{module.tile_width}cmp{args.conv_mem_portion:.2f}'
     if module.pad > 0:
         filename += f'p{module.pad}'
     if module.batch_size > 1:
@@ -84,9 +86,13 @@ if __name__ == '__main__':
                 'conv_mem_portion': args.conv_mem_portion,
                 'pad': args.pad,
                 'input_shape': module.input_shape,
-                'scale': args.scale[0]
+                'scale': args.scale[0],
+                'max_num_ipus': 16,
+                'border_type': 'REFLECT101'
             },
-            fp, indent=2
+            fp,
+            indent=2,
+            sort_keys=True
         )
 
     if not args.skip_simplify:
