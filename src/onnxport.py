@@ -87,7 +87,6 @@ if __name__ == '__main__':
                 'pad': args.pad,
                 'input_shape': module.input_shape,
                 'scale': args.scale[0],
-                'max_num_ipus': 16,
                 'border_type': 'REFLECT101'
             },
             fp,
