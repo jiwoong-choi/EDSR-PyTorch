@@ -45,9 +45,9 @@ parser.add_argument('--no_augment', action='store_true',
                     help='do not use data augmentation')
 
 # ONNX export specifications
-parser.add_argument('--width', type=int, help='Input tile width')
-parser.add_argument('--height', type=int, help='Input tile height')
-parser.add_argument('--pad', type=int, help='Input tile padding size', default=0)
+parser.add_argument('--width', type=int, help='Output tile width')
+parser.add_argument('--height', type=int, help='Output tile height')
+parser.add_argument('--pad-factor', type=int, help='Input tile padding factor', default=0)
 parser.add_argument('--conv-mem-portion', type=float, default=1.0)
 parser.add_argument('--micro-batch-size', type=int, default=1,
                     help='ONNX batch size')

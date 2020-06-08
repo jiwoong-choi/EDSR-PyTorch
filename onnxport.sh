@@ -1,4 +1,4 @@
-python3 src/onnxport.py --pre_train ../models/edsr-x2-r16c64.pt --cpu --n_resblocks 16 --n_feats 64 --scale 2 --conv-mem-portion 0.16 --batches-per-step 9 --width 120 --height 120 --pad 2
-python3 src/onnxport.py --pre_train ../models/edsr-x2-r32c64.pt --cpu --n_resblocks 32 --n_feats 64 --scale 2 --conv-mem-portion 0.16 --batches-per-step 9 --width 120 --height 120 --pad 2
-# python3 src/onnxport_mdsr.py --pre_train ../models/MDSR.pt --cpu --n_resblocks 16 --n_feats 64 --scale 2+3 --conv-mem-portion 0.16 --batches-per-step 1 --width 120 --height 120 --pad 2 --skip-simplify
-python3 src/onnxplit.py --pre_train ../models/MDSR.pt --cpu --n_resblocks 16 --n_feats 64 --scale 2+3 --conv-mem-portion 0.16 --batches-per-step 9 --width 240 --height 240 --pad 1
+python3 src/onnxport.py --model EDSR --pre_train ../models/edsr-x2-r16c64.pt --cpu --n_resblocks 16 --n_feats 64 --scale 2 --conv-mem-portion 0.16 --batches-per-step 1 --width 320 --height 180 --pad-factor 2
+python3 src/onnxport.py --model EDSR --pre_train ../models/edsr-x2-r32c64.pt --cpu --n_resblocks 32 --n_feats 64 --scale 2 --conv-mem-portion 0.16 --batches-per-step 1 --width 320 --height 180 --pad-factor 2
+python3 src/onnxport.py --model EDSR --pre_train ../models/edsr-x3-r16c64.pt --cpu --n_resblocks 16 --n_feats 64 --scale 3 --conv-mem-portion 0.16 --batches-per-step 1 --width 480 --height 270 --pad-factor 2
+python3 src/onnxport.py --model MDSR --pre_train ../models/MDSR.pt --cpu --n_resblocks 16 --n_feats 64 --scale 2+3 --conv-mem-portion 0.16 --batches-per-step 9 --width 240 --height 240 --pad 1
