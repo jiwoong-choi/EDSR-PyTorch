@@ -19,6 +19,12 @@ def gcd(a, b):
     r = a % b
     return b if r == 0 else gcd(b, r)
 
+def lcm(*numbers):
+    assert len(numbers) > 0
+    if len(numbers) == 1:
+        return numbers[0]
+    else:
+        return reduce(lambda x, y: x * y, numbers) // reduce(gcd, numbers)
 
 def pretty_str(x: Union[List, Dict, Tuple]):
     if type(x) is dict:
@@ -59,14 +65,13 @@ class UpsamplerWrapper(torch.nn.Module):
         super(UpsamplerWrapper, self).__init__()
         self.upsampler = upsampler
         self.scale = upsampler[1].upscale_factor
-        if unpad is not None:
-            self.unpad = torch.tensor(unpad)
+        self.unpad_left, self.unpad_right, self.unpad_top, self.unpad_bottom = unpad
 
     def forward(self, x):
-        if self.unpad[0] > 0:
-            x = x[:, :, self.unpad[0]:-self.unpad[0], :]
-        if self.unpad[1] > 0:
-            x = x[:, :, :, self.unpad[1]:-self.unpad[1]]
+        if self.unpad_left > 0:
+            x = x[:, :, self.unpad_left:-self.unpad_right, :]
+        if self.unpad_top > 0:
+            x = x[:, :, :, self.unpad_top:-self.unpad_bottom]
         return self.upsampler(x)
 
 
@@ -90,31 +95,38 @@ class MDSRTail(torch.nn.Module):
 
 class ModelWrapper(torch.nn.Module):
     def __init__(self, args):
+        lcm_scales = lcm(*args.scale)
+        assert args.height % lcm_scales == 0 and args.width % lcm_scales == 0, f'Both output width ({args.width}) and output height ({args.height}) must be divisible by all of the scale factors {args.scale}'
         super(ModelWrapper, self).__init__()
         self.model = Model(args, utility.checkpoint(args)).model
         self.batch_size = args.micro_batch_size
         self.scales = list(sorted(args.scale))
         self.output_shape = (self.batch_size, args.height, args.width, 3)
-        self.sr_pad = self.scales[0] * args.pad_factor if args.model == 'EDSR' else \
-            args.pad_factor * reduce(lambda x, y: x * y, self.scales) // reduce(gcd, self.scales)
-        self.pads = [self.sr_pad // scale for scale in self.scales]
+        self.sr_pad = lcm_scales * args.pad_factor
+        self.pads = []
+        for scale in self.scales:
+            input_width, input_height = self.input_shape[1:3]
+            output_width, output_height = self.output_shape[1:3]
+            horizontal_pad = (input_width - output_width // scale)
+            vertical_pad = (input_height - output_height // scale)
+            left_pad = horizontal_pad // 2
+            right_pad = horizontal_pad - left_pad
+            top_pad = vertical_pad // 2
+            bottom_pad = vertical_pad - top_pad
+            self.pads.append((top_pad, bottom_pad, left_pad, right_pad))
 
         if not self.is_edsr:
             self.head = MDSRHead(self.model)
             self.tail = MDSRTail(self.model, self.sr_pad)
             unpads = []
-            h, w = self.input_shape[1:3]
-            H, W = self.output_shape[1:3]
             for scale_idx, scale in enumerate(self.scales):
-                unpad_x = (w - (W // scale + 2 * self.pads[scale_idx])) // 2
-                unpad_y = (h - (H // scale + 2 * self.pads[scale_idx])) // 2
-                unpads.append((unpad_y, unpad_x))
+                unpads.append([pad - self.sr_pad // scale for pad in self.pads[scale_idx]])
             self.upsamplers = []
             for unpad, upsampler in zip(unpads, self.model.upsample):
                 self.upsamplers.append(UpsamplerWrapper(upsampler, unpad))
 
         dir = os.path.split(args.pre_train)[0]
-        prefix = f'{args.model.lower()}-x{args.scale[0]}r{args.n_resblocks}c{args.n_feats}-w{self.input_shape[2]}h{self.input_shape[1]}'
+        prefix = f'{args.model.lower()}-x{pretty_str(args.scale)}r{args.n_resblocks}c{args.n_feats}-w{self.input_shape[2]}h{self.input_shape[1]}'
         if args.micro_batch_size > 1:
             prefix += f'mb{args.micro_batch_size}'
         if args.opset_version != 10:
@@ -128,12 +140,19 @@ class ModelWrapper(torch.nn.Module):
 
     @property
     def input_shape(self):
+        min_scale = min(self.scales)
         return (
             self.batch_size,
-            (args.height + 2 * self.sr_pad) // self.scales[0],
-            (args.width + 2 * self.sr_pad) // self.scales[0],
+            (self.output_shape[1] + 2 * self.sr_pad) // min_scale,
+            (self.output_shape[2] + 2 * self.sr_pad) // min_scale,
             3
         )
+
+    def tile_height(self, scale_idx):
+        return self.output_shape[1] // self.scales[scale_idx]
+
+    def tile_width(self, scale_idx):
+        return self.output_shape[2] // self.scales[scale_idx]
 
     @property
     def dummy_input(self):
@@ -166,19 +185,39 @@ class ModelWrapper(torch.nn.Module):
     def forward(self, x: torch.Tensor, scale: torch.Tensor):
         if self.is_edsr:
             x = self.model(x.permute((0, 3, 1, 2))).permute((0, 2, 3, 1)).clamp(0, 255)
-            if self.pads[0] > 0:
-                x = x[:, self.scales[0] * self.pads[0]:-self.scales[0] * self.pads[0],
-                    self.scales[0] * self.pads[0]:-self.scales[0] * self.pads[0], :]
+            if self.sr_pad > 0:
+                x = x[:, self.sr_pad:-self.sr_pad, self.sr_pad:-self.sr_pad, :]
             return x
         else:
             x = self.head(x)
             upsample_features = []
             for upsampler in self.upsamplers:
                 upsample_features.append((scale == upsampler.scale) * upsampler(x))
-            x = torch.zeros_like(upsample_features[0])
-            for upsample_feature in upsample_features:
-                x += upsample_feature
+            x = upsample_features[0]
+            for i in range(1, len(upsample_features)):
+                x += upsample_features[i]
             return self.tail(x)
+
+
+def make_plans(wrapper: ModelWrapper):
+    sizes = {'1080p': (1920, 1080), '720p': (1280, 720)}
+    plans = dict()
+    if wrapper.is_edsr:
+        tile_width, tile_height = wrapper.tile_width(0), wrapper.tile_height(0)
+        for name, (width, height) in sizes.items():
+            if width % tile_width == 0 and height % tile_height == 0:
+                plans[name] = wrapper.scales[0]
+    else:
+        scale_candidates = {name: [] for name in sizes}
+        for scale_idx, scale in enumerate(wrapper.scales):
+            tile_width, tile_height = wrapper.tile_width(scale_idx), wrapper.tile_height(scale_idx)
+            for name, (width, height) in sizes.items():
+                if width % tile_width == 0 and height % tile_height == 0:
+                    scale_candidates[name].append(scale)
+        for name, scales in scale_candidates.items():
+            if scales:
+                plans[name] = max(scales)
+    return plans
 
 
 def export_onnx_model(args):
@@ -198,6 +237,7 @@ def export_onnx_model(args):
 
     onnx_model = onnx.load(onnx_path)
     conv_ids = getConvIds(onnx_model.graph)
+    plans = make_plans(wrapper)
 
     config = {
         'num_ipus': 1,
@@ -205,9 +245,11 @@ def export_onnx_model(args):
         'conv_ids': conv_ids,
         'conv_mem_portion': args.conv_mem_portion,
         'pads': wrapper.pads,
+        'sr_pad': wrapper.sr_pad,
         'input_shape': wrapper.input_shape,
         'output_shape': wrapper.output_shape,
         'scales': wrapper.scales,
+        'plans': plans,
         'border_type': 'REFLECT101'
     }
     print(f'Dumping model config at {config_path} ...')
@@ -231,4 +273,5 @@ def export_onnx_model(args):
 
 if __name__ == '__main__':
     from option import args
+
     export_onnx_model(args)
