@@ -16,9 +16,11 @@ from model.mdsr import MDSR
 
 FLOAT16_EPS = 0.000000059605
 
+
 def gcd(a, b):
     r = a % b
     return b if r == 0 else gcd(b, r)
+
 
 def lcm(*numbers):
     assert len(numbers) > 0
@@ -26,6 +28,7 @@ def lcm(*numbers):
         return numbers[0]
     else:
         return reduce(lambda x, y: x * y, numbers) // reduce(gcd, numbers)
+
 
 def pretty_str(x: Union[List, Dict, Tuple]):
     if type(x) is dict:
@@ -35,6 +38,11 @@ def pretty_str(x: Union[List, Dict, Tuple]):
         x = [str(item) for item in x]
         sep = ','
     return sep.join(x)
+
+
+def float_equal(x: torch.Tensor, y: torch.Tensor):
+    diff = torch.abs(x - y)
+    return 1 - diff / (diff + torch.tensor(FLOAT16_EPS))
 
 
 def getConvIds(onnx_graph):
@@ -93,9 +101,6 @@ class MDSRTail(torch.nn.Module):
 
         return x
 
-def float_equal(x: torch.Tensor, y: torch.Tensor):
-    diff = torch.abs(x - y)
-    return 1 - diff / (diff + torch.tensor(FLOAT16_EPS))
 
 class ModelWrapper(torch.nn.Module):
     def __init__(self, args):
@@ -107,8 +112,9 @@ class ModelWrapper(torch.nn.Module):
         self.scales = list(sorted(args.scale))
         self.output_shape = (self.batch_size, args.height, args.width, 3)
         self.sr_pad = lcm_scales * args.pad_factor
-        self.pads = []
-        for scale in self.scales:
+        self.pads = [self.sr_pad // scale for scale in self.scales]
+        self.metapads = []
+        for scale_idx, scale in enumerate(self.scales):
             input_width, input_height = self.input_shape[1:3]
             output_width, output_height = self.output_shape[1:3]
             horizontal_pad = (input_width - output_width // scale)
@@ -117,20 +123,24 @@ class ModelWrapper(torch.nn.Module):
             right_pad = horizontal_pad - left_pad
             top_pad = vertical_pad // 2
             bottom_pad = vertical_pad - top_pad
-            self.pads.append((top_pad, bottom_pad, left_pad, right_pad))
+            self.metapads.append(
+                (
+                    top_pad - self.pads[scale_idx],
+                    bottom_pad - self.pads[scale_idx],
+                    left_pad - self.pads[scale_idx],
+                    right_pad - self.pads[scale_idx]
+                )
+            )
 
         if not self.is_edsr:
             self.head = MDSRHead(self.model)
             self.tail = MDSRTail(self.model, self.sr_pad)
-            unpads = []
-            for scale_idx, scale in enumerate(self.scales):
-                unpads.append([pad - self.sr_pad // scale for pad in self.pads[scale_idx]])
             self.upsamplers = []
-            for unpad, upsampler in zip(unpads, self.model.upsample):
-                self.upsamplers.append(UpsamplerWrapper(upsampler, unpad))
+            for metapad, upsampler in zip(self.metapads, self.model.upsample):
+                self.upsamplers.append(UpsamplerWrapper(upsampler, metapad))
 
         dir = os.path.split(args.pre_train)[0]
-        prefix = f'{args.model.lower()}-x{pretty_str(args.scale)}r{args.n_resblocks}c{args.n_feats}-w{self.input_shape[2]}h{self.input_shape[1]}'
+        prefix = f'{args.model.lower()}-x{pretty_str(args.scale)}-r{args.n_resblocks}c{args.n_feats}-w{self.input_shape[2]}h{self.input_shape[1]}'
         if args.micro_batch_size > 1:
             prefix += f'mb{args.micro_batch_size}'
         if args.opset_version != 10:
@@ -161,12 +171,46 @@ class ModelWrapper(torch.nn.Module):
     @property
     def dummy_input(self):
         if self.is_edsr:
-            return (torch.randn(*self.input_shape), )
+            return (torch.randn(*self.input_shape),)
         else:
             return (
                 torch.randn(*self.input_shape),
                 torch.tensor([np.random.choice(self.scales)]).type(torch.float)
             )
+
+    @property
+    def plans(self):
+        sizes = {'1080p': (1920, 1080), '720p': (1280, 720)}
+        plans = dict()
+        if self.is_edsr:
+            tile_width, tile_height = self.tile_width(0), self.tile_height(0)
+            for name, (width, height) in sizes.items():
+                if width % tile_width == 0 and height % tile_height == 0:
+                    plans[name] = self.scales[0]
+        else:
+            scale_candidates = {name: [] for name in sizes}
+            for scale_idx, scale in enumerate(self.scales):
+                tile_width, tile_height = self.tile_width(scale_idx), self.tile_height(scale_idx)
+                for name, (width, height) in sizes.items():
+                    if width % tile_width == 0 and height % tile_height == 0:
+                        scale_candidates[name].append(scale)
+            for name, scales in scale_candidates.items():
+                if scales:
+                    plans[name] = max(scales)
+        return plans
+
+    @property
+    def config(self):
+        cfg = {
+            'pads': self.pads,
+            'input_shape': self.input_shape,
+            'output_shape': self.output_shape,
+            'scales': self.scales,
+            'plans': self.plans
+        }
+        if not self.is_edsr:
+            cfg.update({'metapads': self.metapads})
+        return cfg
 
     @property
     def input_names(self):
@@ -206,27 +250,6 @@ class ModelWrapper(torch.nn.Module):
             return self.tail(x)
 
 
-def make_plans(wrapper: ModelWrapper):
-    sizes = {'1080p': (1920, 1080), '720p': (1280, 720)}
-    plans = dict()
-    if wrapper.is_edsr:
-        tile_width, tile_height = wrapper.tile_width(0), wrapper.tile_height(0)
-        for name, (width, height) in sizes.items():
-            if width % tile_width == 0 and height % tile_height == 0:
-                plans[name] = wrapper.scales[0]
-    else:
-        scale_candidates = {name: [] for name in sizes}
-        for scale_idx, scale in enumerate(wrapper.scales):
-            tile_width, tile_height = wrapper.tile_width(scale_idx), wrapper.tile_height(scale_idx)
-            for name, (width, height) in sizes.items():
-                if width % tile_width == 0 and height % tile_height == 0:
-                    scale_candidates[name].append(scale)
-        for name, scales in scale_candidates.items():
-            if scales:
-                plans[name] = max(scales)
-    return plans
-
-
 def export_onnx_model(args):
     wrapper = ModelWrapper(args)
     onnx_path = wrapper.model_prefix + '.onnx'
@@ -244,21 +267,16 @@ def export_onnx_model(args):
 
     onnx_model = onnx.load(onnx_path)
     conv_ids = getConvIds(onnx_model.graph)
-    plans = make_plans(wrapper)
 
     config = {
         'num_ipus': 1,
         'batches_per_step': args.batches_per_step,
         'conv_ids': conv_ids,
         'conv_mem_portion': args.conv_mem_portion,
-        'pads': wrapper.pads,
-        'sr_pad': wrapper.sr_pad,
-        'input_shape': wrapper.input_shape,
-        'output_shape': wrapper.output_shape,
-        'scales': wrapper.scales,
-        'plans': plans,
         'border_type': 'REFLECT101'
     }
+    config.update(wrapper.config)
+
     print(f'Dumping model config at {config_path} ...')
     with open(config_path, 'w') as fp:
         json.dump(config, fp, sort_keys=True, indent=2)
@@ -279,6 +297,6 @@ def export_onnx_model(args):
 
 
 if __name__ == '__main__':
-    from option import args
+    from option import args as arguments
 
-    export_onnx_model(args)
+    export_onnx_model(arguments)
