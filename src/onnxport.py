@@ -14,6 +14,7 @@ from model.common import Upsampler
 from model.edsr import EDSR
 from model.mdsr import MDSR
 
+FLOAT16_EPS = 0.000000059605
 
 def gcd(a, b):
     r = a % b
@@ -64,7 +65,7 @@ class UpsamplerWrapper(torch.nn.Module):
     def __init__(self, upsampler: Upsampler, unpad):
         super(UpsamplerWrapper, self).__init__()
         self.upsampler = upsampler
-        self.scale = upsampler[1].upscale_factor
+        self.scale = torch.tensor([upsampler[1].upscale_factor], dtype=torch.float)
         self.unpad_left, self.unpad_right, self.unpad_top, self.unpad_bottom = unpad
 
     def forward(self, x):
@@ -92,6 +93,9 @@ class MDSRTail(torch.nn.Module):
 
         return x
 
+def float_equal(x: torch.Tensor, y: torch.Tensor):
+    diff = torch.abs(x - y)
+    return 1 - diff / (diff + torch.tensor(FLOAT16_EPS))
 
 class ModelWrapper(torch.nn.Module):
     def __init__(self, args):
@@ -156,10 +160,13 @@ class ModelWrapper(torch.nn.Module):
 
     @property
     def dummy_input(self):
-        return (
-            torch.randn(*self.input_shape),
-            torch.tensor([np.random.choice(self.scales)])
-        )
+        if self.is_edsr:
+            return (torch.randn(*self.input_shape), )
+        else:
+            return (
+                torch.randn(*self.input_shape),
+                torch.tensor([np.random.choice(self.scales)]).type(torch.float)
+            )
 
     @property
     def input_names(self):
@@ -182,7 +189,7 @@ class ModelWrapper(torch.nn.Module):
     def output_names(self):
         return ['sr']
 
-    def forward(self, x: torch.Tensor, scale: torch.Tensor):
+    def forward(self, x: torch.Tensor, scale: torch.Tensor = 0):
         if self.is_edsr:
             x = self.model(x.permute((0, 3, 1, 2))).permute((0, 2, 3, 1)).clamp(0, 255)
             if self.sr_pad > 0:
@@ -192,7 +199,7 @@ class ModelWrapper(torch.nn.Module):
             x = self.head(x)
             upsample_features = []
             for upsampler in self.upsamplers:
-                upsample_features.append((scale == upsampler.scale) * upsampler(x))
+                upsample_features.append(float_equal(scale, upsampler.scale) * upsampler(x))
             x = upsample_features[0]
             for i in range(1, len(upsample_features)):
                 x += upsample_features[i]
