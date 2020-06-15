@@ -6,11 +6,7 @@ from typing import Tuple
 STANDARD_RESOLUTIONS = dict()
 for height in (360, 720, 1080, 1440, 2160, 4320):
     STANDARD_RESOLUTIONS[f'{height}p'] = (height * 16 // 9, height)
-STANDARD_RESOLUTIONS['HD'] = STANDARD_RESOLUTIONS['720p']
-STANDARD_RESOLUTIONS['FHD'] = STANDARD_RESOLUTIONS['1080p']
-STANDARD_RESOLUTIONS['QHD'] = STANDARD_RESOLUTIONS['1440p']
-STANDARD_RESOLUTIONS['4K'] = STANDARD_RESOLUTIONS['2160p']
-STANDARD_RESOLUTIONS['8K'] = STANDARD_RESOLUTIONS['4320p']
+
 
 def to_literal(tile_size: Tuple[int]):
     w, h = tile_size
@@ -27,6 +23,7 @@ def from_literal(size_literal: str):
     if size_literal in STANDARD_RESOLUTIONS:
         return STANDARD_RESOLUTIONS.get(size_literal)
     return None
+
 
 SEMI_STANDARD_RESOLUTIONS = [
     # 4:3 aspect ratios
@@ -45,6 +42,7 @@ OTHER_RESOLUTIONS = [
 OTHER_RESOLUTIONS = {to_literal(size): size for size in OTHER_RESOLUTIONS}
 for height in (240, 480):
     OTHER_RESOLUTIONS[f'{height}p'] = (height * 16 // 9, height)
+
 
 def get_divisors(n, ub=None):
     d = []
@@ -224,7 +222,7 @@ def mdsr_tile_sizes(res_literals, include_invalid=False):
             import json
             import warnings
             msg = f'You should consider replacing input resolution {res_literal} by something else. ' \
-                + f'Otherwise you may choose to use an unreasonable config:\n{json.dumps(config)}'
+                  + f'Otherwise you may choose to use an unreasonable config:\n{json.dumps(config)}'
             warnings.warn(msg)
             if include_invalid:
                 info[res_literal] = config

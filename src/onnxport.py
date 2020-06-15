@@ -13,21 +13,14 @@ from model import Model
 from model.common import Upsampler
 from model.edsr import EDSR
 from model.mdsr import MDSR
+from tile_size_utils import (
+    STANDARD_RESOLUTIONS,
+    SEMI_STANDARD_RESOLUTIONS,
+    block_dimension, lcm,
+    get_divisors
+)
 
 FLOAT16_EPS = 0.000000059605
-
-
-def gcd(a, b):
-    r = a % b
-    return b if r == 0 else gcd(b, r)
-
-
-def lcm(*numbers):
-    assert len(numbers) > 0
-    if len(numbers) == 1:
-        return numbers[0]
-    else:
-        return reduce(lambda x, y: x * y, numbers) // reduce(gcd, numbers)
 
 
 def pretty_str(x: Union[List, Dict, Tuple]):
@@ -51,6 +44,21 @@ def getConvIds(onnx_graph):
         if onnx_graph.node[i].op_type == 'Conv':
             conv_ids.append(onnx_graph.node[i].output[0])
     return conv_ids
+
+
+def make_plan(width, height, tile_width, tile_height, batches_per_step, scale_idx):
+    dims = block_dimension((width, height), (tile_width, tile_height))
+    num_blocks = dims[0] * dims[1]
+    if num_blocks % batches_per_step != 0:
+        return None
+    total_loads = num_blocks // batches_per_step
+    num_workers = max(get_divisors(total_loads, 16))
+    num_steps = total_loads // num_workers
+    return {
+        'num_workers': num_workers,
+        'num_steps': num_steps,
+        'scale_idx': scale_idx
+    }
 
 
 class MDSRHead(torch.nn.Module):
@@ -109,6 +117,7 @@ class ModelWrapper(torch.nn.Module):
         super(ModelWrapper, self).__init__()
         self.model = Model(args, utility.checkpoint(args)).model
         self.batch_size = args.micro_batch_size
+        self.batches_per_step = args.batches_per_step
         self.scales = list(sorted(args.scale))
         self.output_shape = (self.batch_size, args.height, args.width, 3)
         self.sr_pad = lcm_scales * args.pad_factor
@@ -180,23 +189,49 @@ class ModelWrapper(torch.nn.Module):
 
     @property
     def plans(self):
-        sizes = {'1080p': (1920, 1080), '720p': (1280, 720)}
+        sizes = {**STANDARD_RESOLUTIONS, **SEMI_STANDARD_RESOLUTIONS}
         plans = dict()
-        if self.is_edsr:
-            tile_width, tile_height = self.tile_width(0), self.tile_height(0)
+        scale_candidates = {name: [] for name in sizes}
+        for scale_idx, scale in enumerate(self.scales):
+            tile_width, tile_height = self.tile_width(scale_idx), self.tile_height(scale_idx)
             for name, (width, height) in sizes.items():
                 if width % tile_width == 0 and height % tile_height == 0:
-                    plans[name] = self.scales[0]
-        else:
-            scale_candidates = {name: [] for name in sizes}
-            for scale_idx, scale in enumerate(self.scales):
-                tile_width, tile_height = self.tile_width(scale_idx), self.tile_height(scale_idx)
-                for name, (width, height) in sizes.items():
-                    if width % tile_width == 0 and height % tile_height == 0:
-                        scale_candidates[name].append(scale)
-            for name, scales in scale_candidates.items():
-                if scales:
-                    plans[name] = max(scales)
+                    scale_candidates[name].append(scale)
+        for name, scales in scale_candidates.items():
+            if scales:
+                width, height = sizes.get(name)
+                scale = min(scales)
+                scale_idx = self.scales.index(scale)
+                tile_width = self.tile_width(scale_idx)
+                tile_height = self.tile_height(scale_idx)
+                plan = make_plan(width, height, tile_width, tile_height, self.batches_per_step, scale_idx)
+                if plan is not None:
+                    plans[name] = plan
+        # if self.is_edsr:
+        #     tile_width, tile_height = self.tile_width(0), self.tile_height(0)
+        #     for name, (width, height) in sizes.items():
+        #         if width % tile_width == 0 and height % tile_height == 0:
+        #             scale = self.scales[0]
+        #             plan = make_plan(width, height, tile_width, tile_height, self.batches_per_step, scale)
+        #             if plan is not None:
+        #                 plans[name] = plan
+        # else:
+        #     scale_candidates = {name: [] for name in sizes}
+        #     for scale_idx, scale in enumerate(self.scales):
+        #         tile_width, tile_height = self.tile_width(scale_idx), self.tile_height(scale_idx)
+        #         for name, (width, height) in sizes.items():
+        #             if width % tile_width == 0 and height % tile_height == 0:
+        #                 scale_candidates[name].append(scale)
+        #     for name, scales in scale_candidates.items():
+        #         if scales:
+        #             width, height = sizes.get(name)
+        #             scale = min(scales)
+        #             scale_idx = self.scales.index(scale)
+        #             tile_width = self.tile_width(scale_idx)
+        #             tile_height = self.tile_height(scale_idx)
+        #             plan = make_plan(width, height, tile_width, tile_height, self.batches_per_step, scale)
+        #             if plan is not None:
+        #                 plans[name] = plan
         return plans
 
     @property
