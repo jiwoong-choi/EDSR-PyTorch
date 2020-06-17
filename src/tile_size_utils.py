@@ -4,7 +4,7 @@ from typing import Tuple
 
 # Chosen from: https://www.digitalcitizen.life/what-screen-resolution-or-aspect-ratio-what-do-720p-1080i-1080p-mean
 STANDARD_RESOLUTIONS = dict()
-for height in (360, 720, 1080, 1440, 2160, 4320):
+for height in (360, 540, 720, 1080, 1440, 2160, 4320):
     STANDARD_RESOLUTIONS[f'{height}p'] = (height * 16 // 9, height)
 
 

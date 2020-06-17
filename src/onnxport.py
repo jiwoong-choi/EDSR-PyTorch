@@ -1,6 +1,5 @@
 import json
 import os
-from functools import reduce
 from typing import Union, List, Dict, Tuple
 
 import numpy as np
