@@ -206,31 +206,6 @@ class ModelWrapper(torch.nn.Module):
                 plan = make_plan(width, height, tile_width, tile_height, self.batches_per_step, scale_idx)
                 if plan is not None:
                     plans[name] = plan
-        # if self.is_edsr:
-        #     tile_width, tile_height = self.tile_width(0), self.tile_height(0)
-        #     for name, (width, height) in sizes.items():
-        #         if width % tile_width == 0 and height % tile_height == 0:
-        #             scale = self.scales[0]
-        #             plan = make_plan(width, height, tile_width, tile_height, self.batches_per_step, scale)
-        #             if plan is not None:
-        #                 plans[name] = plan
-        # else:
-        #     scale_candidates = {name: [] for name in sizes}
-        #     for scale_idx, scale in enumerate(self.scales):
-        #         tile_width, tile_height = self.tile_width(scale_idx), self.tile_height(scale_idx)
-        #         for name, (width, height) in sizes.items():
-        #             if width % tile_width == 0 and height % tile_height == 0:
-        #                 scale_candidates[name].append(scale)
-        #     for name, scales in scale_candidates.items():
-        #         if scales:
-        #             width, height = sizes.get(name)
-        #             scale = min(scales)
-        #             scale_idx = self.scales.index(scale)
-        #             tile_width = self.tile_width(scale_idx)
-        #             tile_height = self.tile_height(scale_idx)
-        #             plan = make_plan(width, height, tile_width, tile_height, self.batches_per_step, scale)
-        #             if plan is not None:
-        #                 plans[name] = plan
         return plans
 
     @property
