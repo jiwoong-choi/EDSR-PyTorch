@@ -15,12 +15,14 @@ from model.mdsr import MDSR
 from tile_size_utils import (
     STANDARD_RESOLUTIONS,
     SEMI_STANDARD_RESOLUTIONS,
+    OTHER_RESOLUTIONS,
     block_dimension, lcm,
     get_divisors
 )
 
 FLOAT16_EPS = 0.000000059605
-
+RESOLUTIONS = {**STANDARD_RESOLUTIONS, **SEMI_STANDARD_RESOLUTIONS, **OTHER_RESOLUTIONS}
+RESOLUTIONS = {key: value for key, value in RESOLUTIONS.items() if value[0] < 2000}
 
 def pretty_str(x: Union[List, Dict, Tuple]):
     if type(x) is dict:
@@ -53,11 +55,7 @@ def make_plan(width, height, tile_width, tile_height, batches_per_step, scale_id
     total_loads = num_blocks // batches_per_step
     num_workers = max(get_divisors(total_loads, 16))
     num_steps = total_loads // num_workers
-    return {
-        'num_workers': num_workers,
-        'num_steps': num_steps,
-        'scale_idx': scale_idx
-    }
+    return scale_idx
 
 
 class MDSRHead(torch.nn.Module):
@@ -187,39 +185,43 @@ class ModelWrapper(torch.nn.Module):
             )
 
     @property
-    def plans(self):
-        sizes = {**STANDARD_RESOLUTIONS, **SEMI_STANDARD_RESOLUTIONS}
-        plans = dict()
-        scale_candidates = {name: [] for name in sizes}
+    def scale_candidates(self):
+        scale_candidates = dict()
         for scale_idx, scale in enumerate(self.scales):
             tile_width, tile_height = self.tile_width(scale_idx), self.tile_height(scale_idx)
-            for name, (width, height) in sizes.items():
+            for name, (width, height) in RESOLUTIONS.items():
                 if width % tile_width == 0 and height % tile_height == 0:
-                    scale_candidates[name].append(scale)
-        for name, scales in scale_candidates.items():
+                    if name in scale_candidates:
+                        scale_candidates[name].append(scale)
+                    else:
+                        scale_candidates[name] = [scale]
+        return scale_candidates
+
+    @property
+    def default_scale_map(self):
+        plans = dict()
+        for name, scales in self.scale_candidates.items():
             if scales:
-                width, height = sizes.get(name)
-                scale = min(scales)
-                scale_idx = self.scales.index(scale)
-                tile_width = self.tile_width(scale_idx)
-                tile_height = self.tile_height(scale_idx)
-                plan = make_plan(width, height, tile_width, tile_height, self.batches_per_step, scale_idx)
-                if plan is not None:
-                    plans[name] = plan
+                plans[name] = min(scales)
         return plans
 
     @property
-    def config(self):
+    def immutable_config(self):
         cfg = {
             'pads': self.pads,
             'input_shape': self.input_shape,
             'output_shape': self.output_shape,
-            'scales': self.scales,
-            'plans': self.plans
+            'scales': self.scales
         }
         if not self.is_edsr:
             cfg.update({'metapads': self.metapads})
         return cfg
+
+    @property
+    def mutable_config(self):
+        return {
+            'scale_map': self.default_scale_map
+        }
 
     @property
     def input_names(self):
@@ -277,14 +279,21 @@ def export_onnx_model(args):
     onnx_model = onnx.load(onnx_path)
     conv_ids = getConvIds(onnx_model.graph)
 
-    config = {
+    immutable_config = {
+        'conv_ids': conv_ids,
+    }
+    mutable_config = {
         'num_ipus': 1,
         'batches_per_step': args.batches_per_step,
-        'conv_ids': conv_ids,
         'conv_mem_portion': args.conv_mem_portion,
         'border_type': 'REFLECT101'
     }
-    config.update(wrapper.config)
+    immutable_config.update(wrapper.immutable_config)
+    mutable_config.update(wrapper.mutable_config)
+    config = {
+        'mutable': mutable_config,
+        'immutable': immutable_config
+    }
 
     print(f'Dumping model config at {config_path} ...')
     with open(config_path, 'w') as fp:
