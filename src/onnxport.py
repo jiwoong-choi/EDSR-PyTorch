@@ -151,7 +151,12 @@ class ModelWrapper(torch.nn.Module):
             prefix += f'mb{args.micro_batch_size}'
         if args.opset_version != 10:
             prefix += f'op{args.opset_version}'
-        self.model_prefix = os.path.join(dir, prefix)
+        if args.pre_train == 'download':
+            download_dir = '../../models/download'
+            os.makedirs(download_dir, exist_ok=True)
+            self.model_prefix = os.path.join(download_dir, prefix)
+        else:
+            self.model_prefix = os.path.join(dir, prefix)
         self.opset_version = args.opset_version
 
     @property
