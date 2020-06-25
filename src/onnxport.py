@@ -16,13 +16,13 @@ from tile_size_utils import (
     STANDARD_RESOLUTIONS,
     SEMI_STANDARD_RESOLUTIONS,
     OTHER_RESOLUTIONS,
-    block_dimension, lcm,
-    get_divisors
+    block_dimension, lcm
 )
 
 FLOAT16_EPS = 0.000000059605
 RESOLUTIONS = {**STANDARD_RESOLUTIONS, **SEMI_STANDARD_RESOLUTIONS, **OTHER_RESOLUTIONS}
 RESOLUTIONS = {key: value for key, value in RESOLUTIONS.items() if value[0] < 2000}
+
 
 def pretty_str(x: Union[List, Dict, Tuple]):
     if type(x) is dict:
@@ -52,9 +52,6 @@ def make_plan(width, height, tile_width, tile_height, batches_per_step, scale_id
     num_blocks = dims[0] * dims[1]
     if num_blocks % batches_per_step != 0:
         return None
-    total_loads = num_blocks // batches_per_step
-    num_workers = max(get_divisors(total_loads, 16))
-    num_steps = total_loads // num_workers
     return scale_idx
 
 
@@ -196,10 +193,12 @@ class ModelWrapper(torch.nn.Module):
             tile_width, tile_height = self.tile_width(scale_idx), self.tile_height(scale_idx)
             for name, (width, height) in RESOLUTIONS.items():
                 if width % tile_width == 0 and height % tile_height == 0:
-                    if name in scale_candidates:
-                        scale_candidates[name].append(scale)
-                    else:
-                        scale_candidates[name] = [scale]
+                    num_tiles = (width // tile_width) * (height // tile_height)
+                    if num_tiles % (self.batches_per_step * self.batch_size) == 0:
+                        if name in scale_candidates:
+                            scale_candidates[name].append(scale)
+                        else:
+                            scale_candidates[name] = [scale]
         return scale_candidates
 
     @property
