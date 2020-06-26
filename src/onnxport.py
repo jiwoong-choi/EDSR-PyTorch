@@ -39,11 +39,12 @@ def float_equal(x: torch.Tensor, y: torch.Tensor):
     return 1 - diff / (diff + torch.tensor(FLOAT16_EPS))
 
 
-def getConvIds(onnx_graph):
+def getConvIds(onnx_path):
+    onnx_graph = onnx.load(onnx_path).graph
     conv_ids = []
-    for i in range(len(onnx_graph.node)):
-        if onnx_graph.node[i].op_type == 'Conv':
-            conv_ids.append(onnx_graph.node[i].output[0])
+    for node in onnx_graph.node:
+        if node.op_type == 'Conv':
+            conv_ids.extend(node.output)
     return conv_ids
 
 
@@ -280,14 +281,12 @@ def export_onnx_model(args):
         opset_version=wrapper.opset_version
     )
 
-    onnx_model = onnx.load(onnx_path)
-    conv_ids = getConvIds(onnx_model.graph)
-
     immutable_config = {
-        'conv_ids': conv_ids,
+        'conv_ids': getConvIds(onnx_path),
     }
     mutable_config = {
         'num_ipus': 1,
+        'num_replica': 1,
         'batches_per_step': args.batches_per_step,
         'conv_mem_portion': args.conv_mem_portion,
         'border_type': 'REFLECT101'
