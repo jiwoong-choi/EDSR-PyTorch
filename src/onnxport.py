@@ -77,7 +77,7 @@ class UpsamplerWrapper(torch.nn.Module):
         super(UpsamplerWrapper, self).__init__()
         self.upsampler = upsampler
         self.scale = torch.tensor([upsampler[1].upscale_factor], dtype=torch.float)
-        self.unpad_left, self.unpad_right, self.unpad_top, self.unpad_bottom = unpad
+        self.unpad_top, self.unpad_bottom, self.unpad_left, self.unpad_right = unpad
 
     def forward(self, x):
         if self.unpad_left > 0:
