@@ -158,6 +158,14 @@ class ModelWrapper(torch.nn.Module):
         self.opset_version = args.opset_version
 
     @property
+    def onnx_path(self):
+        return self.model_prefix + '.onnx'
+
+    @property
+    def config_path(self):
+        return self.model_prefix + '.json'
+
+    @property
     def is_edsr(self):
         return isinstance(self.model, EDSR)
 
@@ -216,7 +224,8 @@ class ModelWrapper(torch.nn.Module):
             'pads': self.pads,
             'input_shape': self.input_shape,
             'output_shape': self.output_shape,
-            'scales': self.scales
+            'scales': self.scales,
+            'conv_ids': getConvIds(self.onnx_path)
         }
         if not self.is_edsr:
             cfg.update({'metapads': self.metapads})
@@ -225,6 +234,12 @@ class ModelWrapper(torch.nn.Module):
     @property
     def mutable_config(self):
         return {
+            'num_ipus': 1,
+            'num_replica': 1,
+            'macro_batch_size': 1,
+            'conv_mem_portion': 0.16,
+            'border_type': 'REFLECT101',
+            'batches_per_step': self.batches_per_step,
             'scale_map': self.default_scale_map
         }
 
@@ -268,50 +283,39 @@ class ModelWrapper(torch.nn.Module):
 
 def export_onnx_model(args):
     wrapper = ModelWrapper(args)
-    onnx_path = wrapper.model_prefix + '.onnx'
-    config_path = wrapper.model_prefix + '.json'
 
-    print(f'Dumping ONNX protobuf (opset {wrapper.opset_version}) at {onnx_path} ...')
+    print(f'Dumping ONNX protobuf (opset {wrapper.opset_version}) at {wrapper.onnx_path} ...')
     torch.onnx.export(
         wrapper,
         wrapper.dummy_input,
-        onnx_path,
+        wrapper.onnx_path,
         input_names=wrapper.input_names,
         output_names=wrapper.output_names,
         opset_version=wrapper.opset_version
     )
 
-    immutable_config = {
-        'conv_ids': getConvIds(onnx_path),
-    }
-    mutable_config = {
-        'num_ipus': 1,
-        'num_replica': 1,
-        'batches_per_step': args.batches_per_step,
-        'conv_mem_portion': args.conv_mem_portion,
-        'border_type': 'REFLECT101'
-    }
-    immutable_config.update(wrapper.immutable_config)
-    mutable_config.update(wrapper.mutable_config)
-    config = {
-        'mutable': mutable_config,
-        'immutable': immutable_config
-    }
-
-    print(f'Dumping model config at {config_path} ...')
-    with open(config_path, 'w') as fp:
-        json.dump(config, fp, sort_keys=True, indent=2)
+    print(f'Dumping model config at {wrapper.config_path} ...')
+    with open(wrapper.config_path, 'w') as fp:
+        json.dump(
+            {
+                'mutable': wrapper.mutable_config,
+                'immutable': wrapper.immutable_config
+            },
+            fp,
+            sort_keys=True,
+            indent=2
+        )
 
     if not args.skip_simplify:
         print('Simplifying ONNX protobuf ...')
         simplified_onnx_model, check_ok = onnxsim.simplify(
-            onnx_path, check_n=args.check_n, perform_optimization=not args.skip_optimization,
+            wrapper.onnx_path, check_n=args.check_n, perform_optimization=not args.skip_optimization,
             skip_fuse_bn=not args.enable_fuse_bn, input_shapes=wrapper.input_shape_dict
         )
 
         if check_ok:
-            print(f'Dumping simplified ONNX protobuf at {onnx_path} ...')
-            onnx.save(simplified_onnx_model, onnx_path)
+            print(f'Dumping simplified ONNX protobuf at {wrapper.onnx_path} ...')
+            onnx.save(simplified_onnx_model, wrapper.onnx_path)
         else:
             print(f'Simplified model failed the checking with random input tensor')
             print(f'Keeping the original ONNX protobuf')

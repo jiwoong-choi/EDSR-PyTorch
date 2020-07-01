@@ -48,7 +48,6 @@ parser.add_argument('--no_augment', action='store_true',
 parser.add_argument('--width', type=int, help='Output tile width')
 parser.add_argument('--height', type=int, help='Output tile height')
 parser.add_argument('--pad-factor', type=int, help='Input tile padding factor', default=0)
-parser.add_argument('--conv-mem-portion', type=float, default=0.16)
 parser.add_argument('--micro-batch-size', type=int, default=1,
                     help='ONNX batch size')
 parser.add_argument('--batches-per-step', type=int, default=1)
