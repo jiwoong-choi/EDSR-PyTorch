@@ -81,9 +81,9 @@ class UpsamplerWrapper(torch.nn.Module):
 
     def forward(self, x):
         if self.unpad_left > 0:
-            x = x[:, :, self.unpad_left:-self.unpad_right, :]
+            x = x[:, :, :, self.unpad_left:-self.unpad_right]
         if self.unpad_top > 0:
-            x = x[:, :, :, self.unpad_top:-self.unpad_bottom]
+            x = x[:, :, self.unpad_top:-self.unpad_bottom, :]
         return self.upsampler(x)
 
 
@@ -119,8 +119,8 @@ class ModelWrapper(torch.nn.Module):
         self.pads = [self.sr_pad // scale for scale in self.scales]
         self.metapads = []
         for scale_idx, scale in enumerate(self.scales):
-            input_width, input_height = self.input_shape[1:3]
-            output_width, output_height = self.output_shape[1:3]
+            input_height, input_width  = self.input_shape[1:3]
+            output_height, output_width  = self.output_shape[1:3]
             horizontal_pad = (input_width - output_width // scale)
             vertical_pad = (input_height - output_height // scale)
             left_pad = horizontal_pad // 2
