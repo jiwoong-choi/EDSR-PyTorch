@@ -56,92 +56,19 @@ def make_plan(width, height, tile_width, tile_height, batches_per_step, scale_id
     return scale_idx
 
 
-class MDSRHead(torch.nn.Module):
-    def __init__(self, mdsr: MDSR):
-        super(MDSRHead, self).__init__()
-        self.sub_mean = mdsr.sub_mean
-        self.head = mdsr.head
-        self.pre_process = mdsr.pre_process[0]
-        self.body = mdsr.body
-
-    def forward(self, x):
-        x = self.sub_mean(x.permute((0, 3, 1, 2)))
-        x = self.head(x)
-        x = self.pre_process(x)
-
-        return self.body(x) + x
-
-
-class UpsamplerWrapper(torch.nn.Module):
-    def __init__(self, upsampler: Upsampler, unpad):
-        super(UpsamplerWrapper, self).__init__()
-        self.upsampler = upsampler
-        self.scale = torch.tensor([upsampler[1].upscale_factor], dtype=torch.float)
-        self.unpad_top, self.unpad_bottom, self.unpad_left, self.unpad_right = unpad
-
-    def forward(self, x):
-        if self.unpad_left > 0:
-            x = x[:, :, :, self.unpad_left:-self.unpad_right]
-        if self.unpad_top > 0:
-            x = x[:, :, self.unpad_top:-self.unpad_bottom, :]
-        return self.upsampler(x)
-
-
-class MDSRTail(torch.nn.Module):
-    def __init__(self, mdsr: MDSR, sr_pad):
-        super(MDSRTail, self).__init__()
-        self.tail = mdsr.tail
-        self.add_mean = mdsr.add_mean
-        self.sr_pad = torch.tensor([sr_pad])
-
-    def forward(self, x):
-        x = self.tail(x)
-        x = self.add_mean(x)
-
-        x = x.permute((0, 2, 3, 1)).clamp(0, 255)
-        if self.sr_pad > 0:
-            x = x[:, self.sr_pad:-self.sr_pad, self.sr_pad:-self.sr_pad, :]
-
-        return x
-
-
 class ModelWrapper(torch.nn.Module):
     def __init__(self, args):
         lcm_scales = lcm(*args.scale)
         assert args.height % lcm_scales == 0 and args.width % lcm_scales == 0, f'Both output width ({args.width}) and output height ({args.height}) must be divisible by all of the scale factors {args.scale}'
         super(ModelWrapper, self).__init__()
         self.model = Model(args, utility.checkpoint(args)).model
+        assert self.model.__class__ in (EDSR, MDSR)
         self.batch_size = args.micro_batch_size
         self.batches_per_step = args.batches_per_step
         self.scales = list(sorted(args.scale))
         self.output_shape = (self.batch_size, args.height, args.width, 3)
         self.sr_pad = lcm_scales * args.pad_factor
         self.pads = [self.sr_pad // scale for scale in self.scales]
-        self.metapads = []
-        for scale_idx, scale in enumerate(self.scales):
-            input_height, input_width  = self.input_shape[1:3]
-            output_height, output_width  = self.output_shape[1:3]
-            horizontal_pad = (input_width - output_width // scale)
-            vertical_pad = (input_height - output_height // scale)
-            left_pad = horizontal_pad // 2
-            right_pad = horizontal_pad - left_pad
-            top_pad = vertical_pad // 2
-            bottom_pad = vertical_pad - top_pad
-            self.metapads.append(
-                (
-                    top_pad - self.pads[scale_idx],
-                    bottom_pad - self.pads[scale_idx],
-                    left_pad - self.pads[scale_idx],
-                    right_pad - self.pads[scale_idx]
-                )
-            )
-
-        if not self.is_edsr:
-            self.head = MDSRHead(self.model)
-            self.tail = MDSRTail(self.model, self.sr_pad)
-            self.upsamplers = []
-            for metapad, upsampler in zip(self.metapads, self.model.upsample):
-                self.upsamplers.append(UpsamplerWrapper(upsampler, metapad))
 
         dir = os.path.split(args.pre_train)[0]
         prefix = f'{args.model.lower()}-x{pretty_str(args.scale)}-r{args.n_resblocks}c{args.n_feats}-w{self.input_shape[2]}h{self.input_shape[1]}'
@@ -170,6 +97,10 @@ class ModelWrapper(torch.nn.Module):
         return isinstance(self.model, EDSR)
 
     @property
+    def is_mdsr(self):
+        return isinstance(self.model, MDSR)
+
+    @property
     def input_shape(self):
         min_scale = min(self.scales)
         return (
@@ -189,7 +120,8 @@ class ModelWrapper(torch.nn.Module):
     def dummy_input(self):
         if self.is_edsr:
             return (torch.randn(*self.input_shape),)
-        else:
+
+        if self.is_mdsr:
             return (
                 torch.randn(*self.input_shape),
                 torch.tensor([np.random.choice(self.scales)]).type(torch.float)
@@ -227,8 +159,6 @@ class ModelWrapper(torch.nn.Module):
             'scales': self.scales,
             'conv_ids': getConvIds(self.onnx_path)
         }
-        if not self.is_edsr:
-            cfg.update({'metapads': self.metapads})
         return cfg
 
     @property
@@ -237,7 +167,7 @@ class ModelWrapper(torch.nn.Module):
             'num_ipus': 1,
             'num_replica': 1,
             'macro_batch_size': 1,
-            'conv_mem_portion': 0.16,
+            'conv_mem_portion': 0.15,
             'border_type': 'REFLECT101',
             'batches_per_step': self.batches_per_step,
             'scale_map': self.default_scale_map
@@ -247,14 +177,16 @@ class ModelWrapper(torch.nn.Module):
     def input_names(self):
         if self.is_edsr:
             return ['lr']
-        else:
+
+        if self.is_mdsr:
             return ['lr', 'scale']
 
     @property
     def input_shape_dict(self):
         if self.is_edsr:
             return {'lr': self.input_shape}
-        else:
+
+        if self.is_mdsr:
             return {
                 'lr': self.input_shape,
                 'scale': (1,)
@@ -270,15 +202,29 @@ class ModelWrapper(torch.nn.Module):
             if self.sr_pad > 0:
                 x = x[:, self.sr_pad:-self.sr_pad, self.sr_pad:-self.sr_pad, :]
             return x
-        else:
-            x = self.head(x)
+
+        if self.is_mdsr:
+            x = self.model.sub_mean(x.permute((0, 3, 1, 2)))
+            x = self.model.head(x)
+            x = self.model.pre_process[0](x)
+
+            x = self.model.body(x) + x
+
             upsample_features = []
-            for upsampler in self.upsamplers:
-                upsample_features.append(float_equal(scale, upsampler.scale) * upsampler(x))
+            for upsampler in self.model.upsample:
+                weight = float_equal(scale, upsampler[1].upscale_factor)
+                feat = upsampler(x)
+                feat = self.model.tail(feat)
+                feat = self.model.add_mean(feat)
+
+                feat = feat.permute((0, 2, 3, 1)).clamp(0, 255)
+                if self.sr_pad > 0 or feat.shape[1:3] != self.output_shape[1:3]:
+                    feat = feat[:, self.sr_pad:self.sr_pad + self.output_shape[1], self.sr_pad:self.sr_pad + self.output_shape[2], :]
+                upsample_features.append(weight * feat)
             x = upsample_features[0]
             for i in range(1, len(upsample_features)):
                 x += upsample_features[i]
-            return self.tail(x)
+            return x
 
 
 def export_onnx_model(args):
