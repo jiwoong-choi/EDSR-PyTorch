@@ -9,7 +9,6 @@ import torch
 
 import utility
 from model import Model
-from model.common import Upsampler
 from model.edsr import EDSR
 from model.mdsr import MDSR
 from tile_size_utils import (
@@ -219,7 +218,8 @@ class ModelWrapper(torch.nn.Module):
 
                 feat = feat.permute((0, 2, 3, 1)).clamp(0, 255)
                 if self.sr_pad > 0 or feat.shape[1:3] != self.output_shape[1:3]:
-                    feat = feat[:, self.sr_pad:self.sr_pad + self.output_shape[1], self.sr_pad:self.sr_pad + self.output_shape[2], :]
+                    feat = feat[:, self.sr_pad:self.sr_pad + self.output_shape[1],
+                           self.sr_pad:self.sr_pad + self.output_shape[2], :]
                 upsample_features.append(weight * feat)
             x = upsample_features[0]
             for i in range(1, len(upsample_features)):
